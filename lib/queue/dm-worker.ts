@@ -72,6 +72,20 @@ const NON_TEMPLATE_REJECTIONS = [
   /requested user cannot be found/i,
 ];
 
+// Errors Meta (or Zernio) returns before anything reaches the inbox. Every
+// other private-reply failure is ambiguous: Meta has been observed answering
+// "An unknown error has occurred" (code=1) and "requested user cannot be found"
+// (code=100 sub=2534014) while still delivering the message. Retrying those
+// re-sends the DM, so they are recorded as unconfirmed and never retried.
+function isConfirmedUndelivered(error: unknown): boolean {
+  if (error instanceof ZernioDeliveryUnconfirmedError) return false;
+  return (
+    error instanceof RateLimitError ||
+    error instanceof TokenExpiredError ||
+    (error instanceof ZernioApiError && error.code < 500)
+  );
+}
+
 function isTemplateRejection(error: unknown): boolean {
   if (
     error instanceof TokenExpiredError ||
@@ -283,7 +297,8 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
       },
     });
 
-    const alreadyDmd = existingLog?.status === "SENT";
+    const alreadyDmd =
+      existingLog?.status === "SENT" || Boolean(existingLog?.dmSentAt);
     const alreadyPublicReplied = Boolean(existingLog?.publicReplySentAt);
     const needsDm = !alreadyDmd && !existingLog?.dmDeliveryUnconfirmed;
 
@@ -379,9 +394,15 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
         },
       });
     } else if (needsDm) {
-      await prisma.dmLog.update({
+      // Conditional so a concurrent job that already delivered is never
+      // downgraded from SENT back to PENDING.
+      await prisma.dmLog.updateMany({
         where: {
-          automationId_commentId: { automationId: automation.id, commentId },
+          automationId: automation.id,
+          commentId,
+          status: { not: "SENT" },
+          dmSentAt: null,
+          dmDeliveryUnconfirmed: false,
         },
         data: {
           status: "PENDING",
@@ -599,6 +620,37 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
           : alreadyFollows !== true;
     }
 
+    // Atomic send claim. The webhook and the polling sweep can enqueue the same
+    // comment seconds apart, and the worker runs jobs concurrently, so a status
+    // read above is not enough to stop two jobs from both sending. Only the job
+    // whose conditional update matches the row may send; the flag stays set
+    // until the send is confirmed (SENT) or confirmed rejected.
+    const claim = await prisma.dmLog.updateMany({
+      where: {
+        automationId: automation.id,
+        commentId,
+        status: { not: "SENT" },
+        dmSentAt: null,
+        dmDeliveryUnconfirmed: false,
+      },
+      data: {
+        status: "PENDING",
+        attempts: job.attemptsMade + 1,
+        dmDeliveryUnconfirmed: true,
+        errorMessage: null,
+      },
+    });
+    if (claim.count === 0) {
+      if (rateLimit?.reserved) {
+        await releaseDMSlot(instagramAccountId);
+      }
+      await releaseWorkspaceDMReservation(
+        automation.workspaceId,
+        usage.periodStart
+      );
+      continue;
+    }
+
     try {
       if (useOpeningDm) {
         const openingText = renderMessageWithTracking({
@@ -710,6 +762,7 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
         data: {
           status: "SENT",
           dmSentAt: new Date(),
+          dmDeliveryUnconfirmed: false,
           errorMessage: null,
         },
       });
@@ -725,21 +778,25 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
         usage.periodStart
       );
 
-      await prisma.dmLog.update({
+      // A confirmed rejection releases the claim so a later retry may send.
+      // Anything else may have delivered, so the claim is kept and the job is
+      // not retried: re-sending is what produced repeated opening DMs.
+      const confirmedUndelivered = isConfirmedUndelivered(error);
+      await prisma.dmLog.updateMany({
         where: {
-          automationId_commentId: {
-            automationId: automation.id,
-            commentId,
-          },
+          automationId: automation.id,
+          commentId,
+          status: { not: "SENT" },
         },
         data: {
           status: "FAILED",
           attempts: job.attemptsMade + 1,
           errorMessage: formatError(error),
-          dmDeliveryUnconfirmed: error instanceof ZernioDeliveryUnconfirmedError,
+          dmDeliveryUnconfirmed: !confirmedUndelivered,
         },
       });
-      throw error;
+      if (confirmedUndelivered) throw error;
+      throw new UnrecoverableError(formatError(error));
     }
   }
 }

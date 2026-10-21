@@ -240,7 +240,13 @@ async function sweepCampaign({
         automationId: automation.id,
         commentId: { in: needsAction.map((c) => c.id) },
         AND: [
-          { OR: [{ status: "SENT" }, { dmDeliveryUnconfirmed: true }] },
+          {
+            OR: [
+              { status: "SENT" },
+              { dmSentAt: { not: null } },
+              { dmDeliveryUnconfirmed: true },
+            ],
+          },
           ...(automation.publicReplyEnabled ? [{ OR: [{ publicReplySentAt: { not: null } }, { publicReplyDeliveryUnconfirmed: true }] }] : []),
         ],
       },

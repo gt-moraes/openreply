@@ -29,6 +29,7 @@ const {
       findFirst: vi.fn(),
       upsert: vi.fn(),
       update: vi.fn(),
+      updateMany: vi.fn(),
       create: vi.fn(),
     },
     instagramAccount: {
@@ -235,6 +236,7 @@ beforeEach(() => {
   );
   mockPrisma.dmLog.upsert.mockResolvedValue({});
   mockPrisma.dmLog.update.mockResolvedValue({});
+  mockPrisma.dmLog.updateMany.mockResolvedValue({ count: 1 });
   mockPrisma.instagramAccount.findUnique.mockResolvedValue({
     workspaceId: "workspace_123",
   });
@@ -482,29 +484,76 @@ describe("DM Worker — Full Pipeline", () => {
     expect(mockSendPrivateReply).not.toHaveBeenCalled();
   });
 
-  it("should log FAILED, release usage, and re-throw when private reply sending fails", async () => {
+  it("should log FAILED, release usage, and stop retrying when a send fails ambiguously", async () => {
     const error = new Error("API Error");
     mockSendPrivateReply.mockRejectedValue(error);
 
     const processor = getProcessor();
 
-    await expect(processor(createMockJob())).rejects.toThrow("API Error");
+    await expect(processor(createMockJob())).rejects.toMatchObject({
+      name: "UnrecoverableError",
+      message: "API Error",
+    });
     expect(mockReleaseWorkspaceDMReservation).toHaveBeenCalledWith(
       "workspace_123",
       usagePeriodStart
     );
-    expect(mockPrisma.dmLog.update).toHaveBeenCalledWith({
+    expect(mockPrisma.dmLog.updateMany).toHaveBeenLastCalledWith({
       where: {
-        automationId_commentId: {
-          automationId: "auto_789",
-          commentId: "comment_555",
-        },
+        automationId: "auto_789",
+        commentId: "comment_555",
+        status: { not: "SENT" },
       },
       data: expect.objectContaining({
         status: "FAILED",
         errorMessage: "API Error",
+        dmDeliveryUnconfirmed: true,
       }),
     });
+  });
+
+  it("should release the send claim and let BullMQ retry a confirmed rejection", async () => {
+    const { RateLimitError } = await import("@/lib/meta/client");
+    mockSendPrivateReply.mockRejectedValue(new RateLimitError("slow down"));
+
+    await expect(getProcessor()(createMockJob())).rejects.toMatchObject({
+      name: "RateLimitError",
+    });
+    expect(mockPrisma.dmLog.updateMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: "FAILED",
+          dmDeliveryUnconfirmed: false,
+        }),
+      })
+    );
+  });
+
+  it("should not send when another job already claimed the comment", async () => {
+    mockPrisma.dmLog.updateMany.mockResolvedValue({ count: 0 });
+
+    await getProcessor()(createMockJob());
+
+    expect(mockSendPrivateReply).not.toHaveBeenCalled();
+    expect(mockReleaseDMSlot).toHaveBeenCalledWith("ig_456");
+    expect(mockReleaseWorkspaceDMReservation).toHaveBeenCalledWith(
+      "workspace_123",
+      usagePeriodStart
+    );
+  });
+
+  it("should never resend when a log already records a delivered DM", async () => {
+    mockPrisma.dmLog.findUnique.mockResolvedValue({
+      status: "FAILED",
+      dmSentAt: new Date("2026-10-16T16:06:30.000Z"),
+      dmDeliveryUnconfirmed: false,
+      publicReplySentAt: null,
+    });
+
+    await getProcessor()(createMockJob());
+
+    expect(mockSendPrivateReply).not.toHaveBeenCalled();
+    expect(mockPrisma.dmLog.updateMany).not.toHaveBeenCalled();
   });
 
   it("should handle missing access token", async () => {
@@ -903,9 +952,10 @@ describe("DM Worker — one private reply per comment", () => {
     );
 
     const processor = getProcessor();
-    await expect(processor(createMockJob())).rejects.toThrow(
-      "The comment is invalid for a private reply"
-    );
+    await expect(processor(createMockJob())).rejects.toMatchObject({
+      name: "UnrecoverableError",
+      message: "The comment is invalid for a private reply",
+    });
 
     // The reserved rate slot must be handed back when the send fails, so a
     // comment that never delivered a DM does not burn slots on each retry.
@@ -914,7 +964,7 @@ describe("DM Worker — one private reply per comment", () => {
     // A text retry on the same comment would fail identically and overwrite the
     // real reason, so it must not be attempted.
     expect(mockSendPrivateReply).not.toHaveBeenCalled();
-    expect(mockPrisma.dmLog.update).toHaveBeenCalledWith(
+    expect(mockPrisma.dmLog.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
           status: "FAILED",
