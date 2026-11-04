@@ -2,6 +2,7 @@ import { createDMWorker } from "@/lib/queue/dm-worker";
 import { recordWorkerHeartbeat } from "@/lib/ops/worker-health";
 import { reconcileComments } from "@/lib/polling/comment-reconciler";
 import { attachPendingNextReels } from "@/lib/automation/attach-next-reel";
+import { processReelPublications } from "@/lib/publishing/reel-publisher";
 import os from "node:os";
 
 const worker = createDMWorker();
@@ -48,10 +49,37 @@ async function poll() {
 setTimeout(() => void poll(), 10_000);
 const pollTimer = setInterval(() => void poll(), POLL_INTERVAL_MS);
 
+// Scheduled reels. Instagram has no native reel scheduling, so the worker
+// publishes them when due and follows each container until it is published.
+const REEL_PUBLISH_INTERVAL_MS = Number(
+  process.env.REEL_PUBLISH_INTERVAL_MS ?? 60_000
+);
+let reelSweepRunning = false;
+
+async function publishReels() {
+  if (reelSweepRunning) return;
+  reelSweepRunning = true;
+  try {
+    const result = await processReelPublications();
+    if (Object.values(result).some((count) => count > 0)) {
+      console.log("[DM Worker] Reel publishing:", result);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    console.error("[DM Worker] Reel publishing failed:", message);
+  } finally {
+    reelSweepRunning = false;
+  }
+}
+
+setTimeout(() => void publishReels(), 15_000);
+const reelTimer = setInterval(() => void publishReels(), REEL_PUBLISH_INTERVAL_MS);
+
 async function shutdown(signal: string) {
   console.log(`[DM Worker] ${signal} received, closing worker`);
   clearInterval(heartbeatTimer);
   clearInterval(pollTimer);
+  clearInterval(reelTimer);
   await worker.close();
   process.exit(0);
 }

@@ -100,6 +100,12 @@ export interface InstagramMediaInsights {
   saved?: number;
   shares?: number;
   total_interactions?: number;
+  /** Reels only: share of initial views that skipped within the first 3 s. */
+  reels_skip_rate?: number;
+  /** Reels only: average play time, in milliseconds. */
+  ig_reels_avg_watch_time?: number;
+  /** Reels only: total play time including replays, in milliseconds. */
+  ig_reels_video_view_total_time?: number;
 }
 
 interface TokenResponse {
@@ -839,4 +845,123 @@ export async function debugToken(inputToken: string, accessToken: string) {
   url.searchParams.set("access_token", accessToken);
   const response = await fetch(url.toString());
   return handleResponse(response);
+}
+
+// ─── Content publishing (reels) ────────────────────────────────────────────────
+// Requires `instagram_business_content_publish`. Instagram Login has no direct
+// upload, so `videoUrl` must be a public URL Meta can fetch.
+
+export type ReelContainerStatus =
+  | "IN_PROGRESS"
+  | "FINISHED"
+  | "PUBLISHED"
+  | "ERROR"
+  | "EXPIRED";
+
+export interface CreateReelContainerInput {
+  videoUrl: string;
+  caption?: string | null;
+  coverUrl?: string | null;
+  thumbOffsetMs?: number | null;
+  shareToFeed?: boolean;
+  /** Set to publish a trial reel, shown only to non-followers. */
+  trialGraduation?: "MANUAL" | "SS_PERFORMANCE" | null;
+}
+
+export function buildReelContainerBody(
+  input: CreateReelContainerInput
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    media_type: "REELS",
+    video_url: input.videoUrl,
+    share_to_feed: input.shareToFeed ?? true,
+  };
+  if (input.caption) body.caption = input.caption;
+  if (input.coverUrl) body.cover_url = input.coverUrl;
+  else if (input.thumbOffsetMs != null) body.thumb_offset = input.thumbOffsetMs;
+  if (input.trialGraduation) {
+    body.trial_params = { graduation_strategy: input.trialGraduation };
+  }
+  return body;
+}
+
+export async function createReelContainer(
+  accessToken: string,
+  instagramAccountId: string,
+  input: CreateReelContainerInput
+): Promise<{ id: string }> {
+  const response = await fetch(
+    `${instagramGraphBase()}/${instagramAccountId}/media`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(buildReelContainerBody(input)),
+    }
+  );
+  return handleResponse(response);
+}
+
+export async function getContainerStatus(
+  accessToken: string,
+  containerId: string
+): Promise<{ status_code: ReelContainerStatus; status?: string }> {
+  const url = new URL(`${instagramGraphBase()}/${containerId}`);
+  url.searchParams.set("fields", "status_code,status");
+  url.searchParams.set("access_token", accessToken);
+  const response = await fetch(url.toString());
+  return handleResponse(response);
+}
+
+export async function publishMediaContainer(
+  accessToken: string,
+  instagramAccountId: string,
+  containerId: string
+): Promise<{ id: string }> {
+  const response = await fetch(
+    `${instagramGraphBase()}/${instagramAccountId}/media_publish`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ creation_id: containerId }),
+    }
+  );
+  return handleResponse(response);
+}
+
+export async function getContentPublishingLimit(
+  accessToken: string,
+  instagramAccountId: string
+): Promise<{ quotaUsage: number; quotaTotal: number | null }> {
+  const url = new URL(
+    `${instagramGraphBase()}/${instagramAccountId}/content_publishing_limit`
+  );
+  url.searchParams.set("fields", "quota_usage,config");
+  url.searchParams.set("access_token", accessToken);
+  const response = await fetch(url.toString());
+  const data = await handleResponse<{
+    data: Array<{ quota_usage?: number; config?: { quota_total?: number } }>;
+  }>(response);
+  const entry = data.data?.[0];
+  return {
+    quotaUsage: entry?.quota_usage ?? 0,
+    quotaTotal: entry?.config?.quota_total ?? null,
+  };
+}
+
+export async function getMediaPermalink(
+  accessToken: string,
+  mediaId: string
+): Promise<string | null> {
+  const url = new URL(`${instagramGraphBase()}/${mediaId}`);
+  url.searchParams.set("fields", "permalink");
+  url.searchParams.set("access_token", accessToken);
+  const response = await fetch(url.toString());
+  const data = await handleResponse<{ permalink?: string }>(response);
+  return data.permalink ?? null;
 }

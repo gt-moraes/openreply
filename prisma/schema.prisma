@@ -85,6 +85,7 @@ model Workspace {
   linkClicks        LinkClick[]
   webhookEvents     WebhookEvent[]
   operationalEvents OperationalEvent[]
+  reelPublications  ReelPublication[]
 
   @@index([ownerId])
 }
@@ -144,6 +145,7 @@ model InstagramAccount {
   dmLogs      DmLog[]
   linkClicks  LinkClick[]
   followerSnapshots FollowerSnapshot[]
+  reelPublications  ReelPublication[]
 
   @@index([workspaceId])
 }
@@ -410,4 +412,74 @@ model ZernioConnection {
 model PostbackDelivery {
   id String @id
   createdAt DateTime @default(now())
+}
+
+/// A reel the creator asked us to publish at a given time. Instagram has no
+/// native scheduling for reels, so the worker holds the row until
+/// `scheduledFor`, then walks it through container -> processing -> publish.
+/// `media_publish` is only ever called on a container whose status_code is
+/// FINISHED, so a retried or crashed run can never publish the same reel twice.
+model ReelPublication {
+  id                 String                 @id @default(cuid())
+  workspaceId        String
+  instagramAccountId String
+  /// Caller-supplied idempotency key (the local script sends the file md5).
+  externalId         String
+  label              String?
+  videoUrl           String
+  videoUrlExpiresAt  DateTime?
+  caption            String?
+  coverUrl           String?
+  thumbOffsetMs      Int?
+  shareToFeed        Boolean                @default(true)
+  /// Null publishes a normal reel; set publishes a trial reel (non-followers only).
+  trialGraduation    ReelTrialGraduation?
+  scheduledFor       DateTime
+  status             ReelPublicationStatus  @default(SCHEDULED)
+  containerId        String?
+  mediaId            String?
+  permalink          String?
+  publishedAt        DateTime?
+  attempts           Int                    @default(0)
+  lastError          String?
+  claimedAt          DateTime?
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  workspace        Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  instagramAccount InstagramAccount     @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
+  insightSnapshots ReelInsightSnapshot[]
+
+  @@unique([instagramAccountId, externalId])
+  @@index([status, scheduledFor])
+  @@index([workspaceId, createdAt])
+}
+
+/// Reel metrics captured at fixed checkpoints after publication (24h, 48h...).
+model ReelInsightSnapshot {
+  id            String   @id @default(cuid())
+  publicationId String
+  hoursAfter    Int
+  metrics       Json
+  collectedAt   DateTime @default(now())
+
+  publication ReelPublication @relation(fields: [publicationId], references: [id], onDelete: Cascade)
+
+  @@unique([publicationId, hoursAfter])
+}
+
+enum ReelPublicationStatus {
+  SCHEDULED
+  CREATING_CONTAINER
+  PROCESSING
+  PUBLISHING
+  PUBLISHED
+  FAILED
+  NEEDS_REVIEW
+  CANCELED
+}
+
+enum ReelTrialGraduation {
+  MANUAL
+  SS_PERFORMANCE
 }
