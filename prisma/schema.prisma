@@ -483,3 +483,22 @@ enum ReelTrialGraduation {
   MANUAL
   SS_PERFORMANCE
 }
+
+
+/// Durable send claim, independent of account lifecycle and campaign history.
+model ProspectingReply {
+  id               String   @id
+  instagramId      String
+  conversationId   String
+  inboundMessageId String
+  textHash         String
+  status           String
+  messageId        String?
+  errorCode        String?
+  dayKey           String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([instagramId, conversationId, inboundMessageId], map: "ProspectingReply_inbound_key")
+  @@index([instagramId, dayKey], map: "ProspectingReply_day_key")
+}
