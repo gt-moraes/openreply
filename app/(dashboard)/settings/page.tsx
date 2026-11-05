@@ -57,6 +57,7 @@ export default function SettingsPage() {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<"ADMIN" | "MEMBER">("MEMBER");
   const [memberError, setMemberError] = useState<string | null>(null);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -77,17 +78,29 @@ export default function SettingsPage() {
   }
 
   async function disconnectInstagram(instagramAccountId: string) {
-    if (!confirm("Disconnect Instagram? Campaigns for this account will stop sending DMs.")) {
+    if (!confirm("Disconnect this account? Accounts with campaigns or history are protected. To renew access, reconnect without disconnecting.")) {
       return;
     }
 
+    setConnectionError(null);
     setBusy(`disconnect:${instagramAccountId}`);
-    await fetch("/api/instagram/disconnect", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ instagramAccountId }),
-    });
-    window.location.reload();
+    try {
+      const response = await fetch("/api/instagram/disconnect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instagramAccountId }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.success) {
+        setConnectionError(typeof payload?.error === "string" ? payload.error : "Could not disconnect this account. No successful removal was confirmed.");
+        return;
+      }
+      window.location.reload();
+    } catch {
+      setConnectionError("Could not confirm the disconnection. Refresh to check the connection before trying again.");
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function inviteMember(event: React.FormEvent) {
@@ -142,6 +155,7 @@ export default function SettingsPage() {
 
       <section className="panel rounded p-4 sm:p-6">
         <h2 className="text-base font-semibold mb-6">Instagram Connection</h2>
+        {connectionError && <p role="alert" className="mb-4 text-sm text-error">{connectionError}</p>}
 
         <div className="space-y-4">
           <div className="flex items-center justify-between gap-3 py-3 border-b border-border">
