@@ -502,3 +502,19 @@ model ProspectingReply {
   @@unique([instagramId, conversationId, inboundMessageId], map: "ProspectingReply_inbound_key")
   @@index([instagramId, dayKey], map: "ProspectingReply_day_key")
 }
+
+// Contacts from a new campaign, verified against the actual first own message.
+model ProspectingEnrollment {
+  id String @id
+  instagramId String
+  workspaceId String
+  handle String
+  campaignId String
+  conversationId String
+  openingMessageId String
+  openingHash String
+  contactedAt DateTime
+  createdAt DateTime @default(now())
+  @@unique([instagramId, handle])
+  @@unique([instagramId, conversationId])
+}

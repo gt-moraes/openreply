@@ -64,3 +64,12 @@ mensagem recebida elegível e comprovante de envio retornado pela Meta.
 
 Referência oficial do formato e requisito de interação recebida:
 [Meta — Instagram Send API](https://www.postman.com/meta/instagram/documentation/6yqw8pt/instagram-api).
+
+
+## New campaign enrollment (05/11)
+
+Historical contacts are excluded from the new campaign. A dedicated write credential can register a new handle only after a recent first own message matching the exact opening is visible in the official conversation. `/api/prospecting/enroll` never sends messages. Registration is immutable by account/handle and cannot be moved to another campaign. Static historical allowlist remains readable but cannot enroll or receive automated replies through this route.
+
+The enrolled conversation ID and contact timestamp bind subsequent reads, metadata polling and replies. A different thread for the same handle is rejected before loading its messages. The new additive enrollment table has no deletion cascade tied to account reconnection. Production readiness returns enrollmentJournalReady after querying that table.
+
+Local execution and the Hermes job remain paused until preparation and native Chrome validation are complete.

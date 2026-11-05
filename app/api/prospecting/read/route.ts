@@ -1,3 +1,4 @@
+import {enrolledScope} from "@/lib/prospecting/enrollment-scope";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/client";
 import { createInstagramContext } from "@/lib/instagram/context";
@@ -38,7 +39,9 @@ export async function POST(request: Request) {
     let body;
     try { body = JSON.parse(text); }
     catch { throw new ProspectingReadError(400, "Invalid JSON."); }
-    const data = await readProspectingThread(body, scope, {
+    const selection=body as {handle?:unknown};
+    const selectedScope=await enrolledScope(scope,[selection?.handle]);
+    const data = await readProspectingThread(body, selectedScope, {
       findAccount: (id, workspaceId) => prisma.instagramAccount.findFirst({ where: { id, workspaceId } }),
       conversations: async account => {
         const stored = await prisma.instagramAccount.findFirst({ where: { id: account.id, workspaceId: account.workspaceId, instagramId: account.instagramId, username: PROSPECTING_USERNAME, provider: "META" } });

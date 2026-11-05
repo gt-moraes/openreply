@@ -12,6 +12,8 @@ export function selectProspectingUpdates(body: unknown, scope: ProspectingScope,
     });
     if (matches.length !== 1) return [];
     const row = matches[0];
+    const binding=scope.enrollments?.get(handle);
+    if(binding&&(row.id!==binding.conversationId||!row.updated_time||Date.parse(row.updated_time)<binding.contactedAt.getTime()))return [];
     if (!row.id || !row.updated_time || !Number.isFinite(Date.parse(row.updated_time))) return [];
     return [{ handle, conversationId: row.id, updatedAt: new Date(row.updated_time).toISOString() }];
   });

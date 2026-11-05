@@ -1,8 +1,8 @@
 import { prisma } from "@/lib/db/client";
 import { createInstagramContext } from "@/lib/instagram/context";
-import { ProspectingReadError, PROSPECTING_USERNAME, type authorizeProspecting } from "./read";
+import { ProspectingReadError, PROSPECTING_USERNAME, type EnrollmentScope } from "./read";
 
-export type ProspectingScope = ReturnType<typeof authorizeProspecting>;
+export type ProspectingScope = EnrollmentScope;
 export const privateHeaders = { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" };
 
 export async function scopedMeta(scope: ProspectingScope) {

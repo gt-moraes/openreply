@@ -1,3 +1,4 @@
+import {enrolledScope} from "@/lib/prospecting/enrollment-scope";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/client";
 import { getMetaGraphApiVersion } from "@/lib/env";
@@ -13,8 +14,10 @@ export const maxDuration = 60;
 
 export async function POST(request: Request) {
   try {
-    const scope = authorizeReply(request.headers.get("authorization"));
-    const command = validateReplyCommand(await privateJson(request), scope.allowedHandles, process.env.PROSPECTING_WHATSAPP_URL);
+    let scope = authorizeReply(request.headers.get("authorization"));
+    const body=await privateJson(request);
+    scope=await enrolledScope(scope,[(body as {handle?:unknown})?.handle],true);
+    const command = validateReplyCommand(body, scope.allowedHandles, process.env.PROSPECTING_WHATSAPP_URL);
     const { account, accessToken } = await scopedMeta(scope);
     let discoveryCache: Awaited<ReturnType<typeof discoverProspectingConversations>> | null = null;
     const dayKey = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(new Date());

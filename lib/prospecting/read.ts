@@ -34,9 +34,12 @@ export function authorizeProspecting(authorization: string | null, env: Record<s
   return { accountId, workspaceId, allowedHandles: new Set(handles) };
 }
 
+export type EnrollmentBinding={conversationId:string;contactedAt:Date};
+export type EnrollmentScope=ReturnType<typeof authorizeProspecting>&{enrollments?:Map<string,EnrollmentBinding>};
+
 export async function readProspectingThread(
   body: unknown,
-  scope: ReturnType<typeof authorizeProspecting>,
+  scope: EnrollmentScope,
   deps: Dependencies,
 ) {
   if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length !== 1 || !("handle" in body) || typeof body.handle !== "string") {
@@ -59,6 +62,8 @@ export async function readProspectingThread(
     throw new ProspectingReadError(409, "A unique recent conversation could not be confirmed.");
   }
   const conversation = matches[0];
+  const binding=scope.enrollments?.get(handle);
+  if(binding&&binding.conversationId!==conversation.id)throw new ProspectingReadError(409,"Enrolled conversation changed.");
   const contact = conversation.participants!.data.find(p => p.id !== account.instagramId)!;
   const raw = await deps.messages(account, conversation.id);
   const seen = new Set<string>();
@@ -73,6 +78,7 @@ export async function readProspectingThread(
       createdAt: message.created_time && Number.isFinite(Date.parse(message.created_time)) ? new Date(message.created_time).toISOString() : null,
     };
   }).reverse();
+  if(binding&&messages.some(m=>!m.createdAt||Date.parse(m.createdAt)<binding.contactedAt.getTime()-60000))throw new ProspectingReadError(409,"History predates new campaign contact.");
   return {
     account: PROSPECTING_USERNAME, handle, conversationId: conversation.id,
     source: "instagram_api", observedAt: new Date().toISOString(),
